@@ -1,0 +1,12 @@
+name: bcn_fire_shiny
+title: bcn_fire_shiny
+username: bcnfire
+account: bcnfire
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 13953087
+bundleId: 9775705
+url: https://bcnfire.shinyapps.io/bcn_fire_shiny/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

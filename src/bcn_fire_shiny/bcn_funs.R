@@ -9,7 +9,9 @@ get_burners <- function(time_horizon,
                         cell_size = 200, # in meters
                         time_step = 15,    # in minutes
                         scenario = "bau", # select scenario (bau, sal)
-                        full = FALSE # return full data frame or last column
+                        full = FALSE, # return full data frame or last column
+                        grd = grd,
+                        neighbor_idx = neighbor_idx
 ) {
   
   # define variable names based on scenario

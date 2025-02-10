@@ -4,3 +4,5 @@
 .Ruserdata
 
 data/
+src/bcn_fire_shiny/grd_bau.gpkg
+src/bcn_fire_shiny/neighbor_idx.RData

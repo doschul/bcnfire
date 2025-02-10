@@ -4,7 +4,7 @@
 #setwd("C:/Users/DaSchulz/OneDrive - European Forest Institute/Dokumente/research/bcn_fire")
 
 # get functions
-source("./bcn_funs.R")
+source("bcn_funs.R")
 
 # libraries
 library(tidyverse)
@@ -16,12 +16,12 @@ library(sf)
 
 
 # load grid
-grd <- st_read("./data/rdat/grd_bau.gpkg") %>%
+grd <- st_read("grd_bau.gpkg") %>%
   # transform cs to lon lat
   st_transform(., 4326)
 
 # load neighbors
-load("./data/rdat/neighbor_idx.RData")
+load("neighbor_idx.RData")
 
 ##### Shiny app #####
 
@@ -41,7 +41,7 @@ server <- function(input, output) {
   output$map <- renderLeaflet({
     leaflet() %>%
       addTiles() %>%
-      addPolygons(data = grd[1:1000,],
+      addPolygons(data = grd,
                   layerId = ~id,
                   color = "darkgrey",
                   weight = 1,
@@ -58,7 +58,14 @@ server <- function(input, output) {
     req(selected_cell())
     
     # run get burners with ignition cell and t 10
-    burners <- get_burners(input$slider, selected_cell())
+    burners <- get_burners(time_horizon = input$slider,
+                           ignition_cell = selected_cell(),
+                           cell_size = 200, # in meters
+                           time_step = 15,    # in minutes
+                           scenario = "bau", # select scenario (bau, sal)
+                           full = FALSE, # return full data frame or last column
+                           grd = grd,
+                           neighbor_idx = neighbor_idx)
     
     # set 0 burner to NA
     burners$burning[burners$burning == 0] <- NA
@@ -67,7 +74,7 @@ server <- function(input, output) {
     burned_cells(sum(burners$burning == 1, na.rm = TRUE))
     partially_burned_cells(sum(burners$burning, na.rm = TRUE))
     
-    pal <- colorNumeric(palette = colorRampPalette(c("yellow", "red"))(100), domain = seq(0, 1, length.out = 100))
+    pal <- colorNumeric(palette = colorRampPalette(c("yellow", "red"))(100), domain = seq(0, 1, length.out = 10))
     
     # Update the polygons based on the clicked cell
     leafletProxy("map") %>%

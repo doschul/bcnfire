@@ -75,8 +75,12 @@ get_burners <- function(time_horizon,
   
   last_col_name <- tail(names(bdf), 1)
   
+  # set last column to one if larger than one
+  bdf[, last_col_name] <- pmin(1, bdf[, last_col_name])
+  
   if (full) {
-    bdf <- bdf %>% 
+    bdf <- bdf  %>%
+      mutate(id = grd$id) %>% 
       filter(!!sym(last_col_name) > 0)
     return(bdf)
   } else {

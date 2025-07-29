@@ -1,0 +1,8 @@
+"","variable","lower","median","upper","distribution"
+"1","time_horizon",36,NA,36,"const"
+"2","total_wildland_area",165253,NA,165253,"const"
+"3","houses_per_ha",1,NA,20,"unif"
+"4","house_price",20000,NA,100000,"lnorm"
+"5","agric_land_price",4000,NA,18000,"posnorm"
+"6","fire_fight_cost_per_ha",60,NA,2000,"posnorm"
+"7","salvage_logging_cost_per_ha",1750,NA,2150,"posnorm"

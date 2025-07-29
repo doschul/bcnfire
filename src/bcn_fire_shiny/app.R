@@ -43,9 +43,10 @@ server <- function(input, output) {
       addTiles() %>%
       addPolygons(data = grd,
                   layerId = ~id,
-                  color = "darkgrey",
+                  color = "black",
+                  fillColor = "black",
                   weight = 1,
-                  fillOpacity = 0,
+                  fillOpacity = 0.1,
                   fill = T)
   })
   

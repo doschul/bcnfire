@@ -1,0 +1,8 @@
+﻿variable;lower;median;upper;distribution
+time_horizon;36;NA;36;const
+total_wildland_area;88174;NA;88174;const
+houses_per_ha;1;NA;20;unif
+house_price;20000;NA;100000;lnorm
+agric_land_price;4000;NA;18000;posnorm
+fire_fight_cost_per_ha;60;NA;2000;posnorm
+salvage_logging_cost_per_ha;1750;;2150;posnorm

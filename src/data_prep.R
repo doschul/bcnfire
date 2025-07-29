@@ -17,6 +17,8 @@ library(spdep) # for poly2nb
 rcl_lc <- FALSE # whether or not to reclassify raw landcover raster
 
 
+# small change
+
 # data paths
 
 path_topo <- "./data/topo/topo_bcn.tif"

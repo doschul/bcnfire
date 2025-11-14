@@ -2,6 +2,8 @@
 
 ##### Setup #####
 
+rm(list=ls())
+
 # working directory
 setwd("C:/Users/DaSchulz/OneDrive - European Forest Institute/Dokumente/research/bcnfire")
 
@@ -17,11 +19,10 @@ library(spdep) # for poly2nb
 rcl_lc <- FALSE # whether or not to reclassify raw landcover raster
 
 
-# small change
-
 # data paths
 
 path_topo <- "./data/topo/topo_bcn.tif"
+path_wui <- "./data/wui/WUI_Catalonia.tif"
 
 path_lc_raw <- "./data/landcover/BMRlandcover.tif"
 path_lc_rcl <- "./data/landcover/BMRlandcover_rcl.tif"
@@ -51,8 +52,8 @@ cn_sal <- rast(path_con_sal_avg)
 r.bm <- c(bm_bau, bm_sal)
 r.cn <- c(cn_bau, cn_sal)
 
-names(r.bm.avg) <- c("biomass_bau_avg", "biomass_sal_avg")
-names(r.cn.avg) <- c("connectivity_bau_avg", "connectivity_sal_avg")
+names(r.bm) <- c("biomass_bau_avg", "biomass_sal_avg")
+names(r.cn) <- c("connectivity_bau_avg", "connectivity_sal_avg")
 
 
 # load and c rasters 
@@ -69,12 +70,9 @@ annual_con_rast <- list.files(path_annual_con_rast, pattern = ".tif$",full.names
   do.call(c, .) 
 
 # Assign names to the SpatRaster object using base R's names() function
-names(annual_mask_rast) <- gsub(".tif", "", list.files(annual_mask_rast_dir, pattern = ".tif$"))
-names(annual_ros_rast) <- gsub(".tif", "", list.files(annual_ros_rast_dir, pattern = ".tif$"))
-names(annual_con_rast) <- gsub(".tif", "", list.files(annual_con_rast_dir, pattern = ".tif$"))
-
-annual_maps <- c(annual_mask_rast, annual_ros_rast, annual_con_rast)
-
+names(annual_mask_rast) <- gsub(".tif", "", list.files(path_annual_mask_rast, pattern = ".tif$"))
+names(annual_ros_rast) <- gsub(".tif", "", list.files(path_annual_ros_rast, pattern = ".tif$"))
+names(annual_con_rast) <- gsub(".tif", "", list.files(path_annual_con_rast, pattern = ".tif$"))
 
 # load topography raster
 topo <- rast(path_topo)
@@ -224,18 +222,26 @@ grd <- grd %>%
 
 #### Average scenarios ####
 
-e.avg.bm <- terra::extract(r.bm.avg, grd_ctrd)
-e.avg.cn <- terra::extract(r.cn.avg, grd_ctrd)
+e.avg.bm <- terra::extract(r.bm, grd_ctrd, ID = F)
+e.avg.cn <- terra::extract(r.cn, grd_ctrd, ID = F)
 
 # annual values of masks, biomass and connectivity
-e.annual <- terra::extract(annual_maps, grd_ctrd)
+e.annual.msk <- terra::extract(annual_mask_rast, grd_ctrd, ID = F)
+e.annual.ros <- terra::extract(annual_ros_rast, grd_ctrd, ID = F)
+e.annual.con <- terra::extract(annual_con_rast, grd_ctrd, ID = F)
 
 # merge with grd data
 grd <- grd %>% 
   cbind(. , e.avg.bm) %>%
   cbind(. , e.avg.cn) %>%
-  cbind(. , e.annual)
+  cbind(. , e.annual.ros) %>%
+  cbind(. , e.annual.con) %>%
+  cbind(. , e.annual.msk)
 
+# save full grid (unfiltered)
+write_sf(grd, "./data/rdat/grd_full.gpkg")
+
+apply(grd, 2, function(x){sum(is.na(x))})
 
 # Filter data and save
 #max_con <- max(grd$connectivity_bau, na.rm = T)
@@ -245,78 +251,60 @@ grd <- grd %>%
 #grd$connectivity_sal <- grd$connectivity_sal / max_con
 
 # subset data to non missing biomass
-grd <- grd[!is.na(grd$biomass_bau),]
-
-# replace con NA with 0
-grd$connectivity_bau[is.na(grd$connectivity_bau)] <- 0
-grd$connectivity_sal[is.na(grd$connectivity_sal)] <- 0
+grd_f <- grd %>%
+  filter(!is.na(biomass_bau_avg),
+         !is.na(mean.elev)) %>%
+  # replace all NA with 0
+  replace(is.na(.), 0)
 
 
 row.names(grd) <- paste0("cell_", 1:nrow(grd)) # Set row names to "cell_1", "cell_2", etc.
+row.names(grd_f) <- paste0("cell_", 1:nrow(grd_f)) # Set row names to "cell_1", "cell_2", etc.
+
+# load wildland urba interface
+wui <- rast(path_wui)
+wui_e <- exactextractr::exact_extract(wui, grd_f, fun="frac")
+
+names(wui_e) <- c("wui_low", "wui_medium", "wui_nohouse", "wui_verylow", "wui_intermix", "wui_interface")
+grd_f <- bind_cols(grd_f, wui_e)
 
 # save grid
-write_sf(grd, "./data/rdat/grd.gpkg")
-grd <- st_read("./data/rdat/grd.gpkg")
+write_sf(grd_f, "./data/rdat/grd_filt.gpkg")
 
 ##### Create neighborhood list #####
 
-# work with nb indices instead of ids
-# Create a sparse adjacency matrix
-# adjacent <- st_intersects(grd, sparse = TRUE)
-# 
-# # exclude self-intersections
-# neighbor_idx <- list()
-# 
-# for (i in 1:length(adjacent)) {
-#   neighbor_idx[[i]] <- adjacent[[i]] %>% subset(!.==i)
-#   #neighbor_idx[[i]] <- grd$id[neighbor_index]
-# }
-# 
-# # save neighbors
-# save(neighbor_idx, file = "neighbor_idx.RData")
-# load("./data/rdat/neighbor_idx.RData")
+# 1. Read the spatial data frame
+grd <- st_read("./data/rdat/grd_filt.gpkg")
+row.names(grd) <- paste0("cell_", 1:nrow(grd)) # Set row names to "cell_1", "cell_2", etc.
 
-# Alternative: identify queen and king nieghbors
+# 2. Get all queen and all rook neighbors (these already return lists of numeric indices)
+nb_queen_all_indices <- poly2nb(grd, queen = TRUE)
+nb_rook_indices <- poly2nb(grd, queen = FALSE)
 
-nb_queen_all <- poly2nb(grd, queen = TRUE)  # All queen neighbors
-nb_rook <- poly2nb(grd, queen = FALSE)     # All rook neighbors
-
-# Initialize an empty list to store the results
-neighbor_list <- vector("list", length = nrow(grd))
-names(neighbor_list) <- row.names(grd)
-
-# Populate the list
-for (i in seq_along(nb_queen_all)) {
-  current_cell_name <- row.names(grd)[i]
+# 3. Directly create the differentiated neighbor list using lapply
+# This builds the list where each element is a list(rook = ..., queen = ...)
+# and the outer list is naturally indexed by cell position (1 to nrow(grd)).
+neighbor_idx_differentiated <- lapply(seq_along(nb_queen_all_indices), function(i) {
+  current_rook_indices <- nb_rook_indices[[i]]
+  current_all_queen_indices <- nb_queen_all_indices[[i]]
   
-  # Get rook neighbors (indices)
-  rook_neighbors_indices <- nb_rook[[i]]
-  rook_neighbors_names <- if (length(rook_neighbors_indices) > 0) {
-    row.names(grd)[rook_neighbors_indices]
-  } else {
-    character(0)
-  }
+  # Determine exclusive queen neighbors by removing rook neighbors from all queen neighbors
+  exclusive_queen_indices <- setdiff(current_all_queen_indices, current_rook_indices)
   
-  # Get all queen neighbors (indices)
-  all_queen_neighbors_indices <- nb_queen_all[[i]]
-  
-  # Determine exclusive queen neighbors: those in all_queen_neighbors_indices but not in rook_neighbors_indices
-  exclusive_queen_neighbors_indices <- setdiff(all_queen_neighbors_indices, rook_neighbors_indices)
-  exclusive_queen_neighbors_names <- if (length(exclusive_queen_neighbors_indices) > 0) {
-    row.names(grd)[exclusive_queen_neighbors_indices]
-  } else {
-    character(0)
-  }
-  
-  neighbor_list[[current_cell_name]] <- list(
-    rook = rook_neighbors_names,
-    queen = exclusive_queen_neighbors_names
+  list(
+    rook = current_rook_indices,
+    queen = exclusive_queen_indices
   )
-}
+})
 
-save(neighbor_list, file = "./data/rdat/nb_list_rq_short.RData")
+# 4. Assign original row names to the list elements for direct lookup later
+# This ensures that neighbor_idx_differentiated[[ignition_idx]] works correctly
+# when ignition_idx is a row name string.
+names(neighbor_idx_differentiated) <- row.names(grd)
 
-save(neighbor_list, file = "./data/rdat/nb_list_rq.RData")
-load("./data/rdat/nb_list_rq.RData")
+# The variable 'neighbor_idx_differentiated' now contains the pre-processed list
+# in the exact format expected by get_burners_optimized.
 
+# save the neighbor list for later use
+save(neighbor_idx_differentiated, file = "./data/rdat/neighbor_idx_differentiated.RData")
 

@@ -4,5 +4,10 @@
 .Ruserdata
 
 data/
+lit/
 src/bcn_fire_shiny/grd_bau.gpkg
 src/bcn_fire_shiny/neighbor_idx.RData
+FB.zip
+mc_raw_dt.rds
+mc_raw_dt_tail.rds
+catalunya_grd.RData

@@ -30,7 +30,7 @@ out_fig_dir   <- here::here("out", "fig")
 out_tab_dir   <- here::here("out", "tab")
 
 # Source helper functions
-funs_path <- here::here("src", "bcn_funs.R")
+funs_path <- here::here("src", "R", "bcn_funs.R")
 if (file.exists(funs_path)) source(funs_path)
 
 # ---------- Analysis ----------

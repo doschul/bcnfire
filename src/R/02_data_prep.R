@@ -54,7 +54,7 @@ path_annual_ros_rast <- "./data/Re_ Omnsicape Algorihm/ROS_rasters"
 path_annual_con_rast <- "./data/Re_ Omnsicape Algorihm/CON_rasters"
 
 # Source helper functions
-funs_path <- here::here("src", "bcn_funs.R")
+funs_path <- here::here("src", "R", "bcn_funs.R")
 if (file.exists(funs_path)) source(funs_path)
 
 # ---------- Analysis ----------

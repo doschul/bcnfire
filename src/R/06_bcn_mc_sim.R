@@ -95,7 +95,7 @@ out_fig_dir   <- here::here("out", "fig")
 out_tab_dir   <- here::here("out", "tab")
 
 # Source helper functions
-funs_path <- here::here("src", "bcn_funs.R")
+funs_path <- here::here("src", "R", "bcn_funs.R")
 if (file.exists(funs_path)) source(funs_path)
 
 
@@ -159,153 +159,168 @@ setDT(perc_data_long)
 mc_raw_list_dt <- list()
 mc_results_list_dt <- list()
 
-# set fire domain (full or tail)
-percentile_start <- 0.01
-percentile_end <- 0.99
-freq_min <- 1
-freq_max <- 10
+# Scenario settings: full distribution and single extreme event
+scenario_params <- data.table(
+  fire_domain = c("Full", "Tail"),
+  percentile_start = c(0.01, 0.95),
+  percentile_end = c(0.99, 0.99),
+  freq_min = c(1L, 1L),
+  freq_max = c(10L, 1L),
+  fixed_duration_min = c(NA_real_, 200)
+)
 
 # --------------------------
 # Simulation loop
 # --------------------------
-for (s in seq_along(v_strategies)) {
-  current_strategy <- v_strategies[s]
-  cat("\nProcessing strategy:", current_strategy)
-  
-  target_strategy_dt <- target_df_agg[strategy == current_strategy]
-  area_strategy_dt   <- perc_data_long[strategy == current_strategy]
-  
-  for (y in seq_along(v_years)) {
-    current_year <- v_years[y]
-    cat("\n - Year:", current_year)
-    
-    sal_costs_dt <- target_strategy_dt[year == current_year,
-                                       .(sal_int = threshold, sum_SAL_costs)]
-    area_year_dt <- area_strategy_dt[year == current_year]
-    
-    cat(" -- Threshold: ")
-    
-    for (t in seq_along(v_thresholds)) {
-      current_threshold <- v_thresholds[t]
-      cat(current_threshold, "..")
-      
-      # --- 1. Extract costs and areas
-      current_sal_costs <- sal_costs_dt[sal_int == current_threshold, sum_SAL_costs]
-      if (length(current_sal_costs) == 0) current_sal_costs <- 0
-      
-      # Subset area data for this threshold
-      current_area_dt <- area_year_dt[sal_int == current_threshold,
-                                      .(time, percentile,
-                                        abs_avoid_tot_ha,
-                                        abs_avoid_agri_ha,
-                                        abs_avoid_urbn_ha,
-                                        abs_avoid_wild_ha)]
-      
-      # --- 2. Sample number of fires per year for each simulation (1–10)
-      number_fires_vec <- sample(freq_min:freq_max, num_simulations, replace = TRUE)
-      total_fires <- sum(number_fires_vec)
-      
-      # --- 3. Mapping of fires to simulation IDs
-      fire_map <- data.table(
-        simulation_id = rep(seq_len(num_simulations), times = number_fires_vec)
-      )
-      
-      # --- 4. Draw all random values
-      sim_fire_dt <- data.table(
-        simulation_id = fire_map$simulation_id,
-        fire_id = sequence(number_fires_vec),
-        #percentile = runif(total_fires, 0.01, 0.99),
-        percentile = runif(total_fires, percentile_start, percentile_end),
-        duration_min = sample(dur, total_fires, replace = TRUE),
-        #duration_min = rep(200, total_fires), # 95 percentile of calibrated durations
-        
-        land_price_agr = rlnorm(total_fires, meanlog = log(3000), sdlog = 0.6),
-        fire_fight_cost_per_ha = rlnorm(total_fires, meanlog = log(24000), sdlog = 0.15),
-        eur_m2 = rlnorm(total_fires, meanlog = log(1600), sdlog = 0.25),
-        damage_ratio = pmin(rbeta(total_fires, 2, 4), 1),
-        
-        dens_verylow  = runif(total_fires, 0.02, 0.06),
-        dens_low      = runif(total_fires, 0.10, 0.50),
-        dens_medium   = runif(total_fires, 0.50, 40.0),
-        dens_intermix = runif(total_fires, 0.06, 7.50),
-        dens_interface= runif(total_fires, 0.06, 40.0),
-        
-        fa_verylow  = rnorm(total_fires, 250, 20),
-        fa_low      = rnorm(total_fires, 160, 20),
-        fa_medium   = rnorm(total_fires, 100, 15),
-        fa_intermix = rnorm(total_fires, 150, 15),
-        fa_interface= rnorm(total_fires, 120, 15),
-        
-        vuln_verylow  = 0.6,
-        vuln_low      = 0.7,
-        vuln_medium   = 0.85,
-        vuln_intermix = 1.0,
-        vuln_interface= 1.0
-      )
-      
-      # --- 5. Discretize to lookup resolution
-      sim_fire_dt[, percentile := round(percentile, 2)]
-      sim_fire_dt[, duration_min := round_to_5(duration_min)]
-      
-      
-      # --- 6. Exact match join to attach avoided areas
-      setkey(current_area_dt, percentile, time)
-      setkey(sim_fire_dt, percentile, duration_min)
-      
-      sim_fire_dt <- current_area_dt[
-        sim_fire_dt, on = .(percentile, time = duration_min), roll = "nearest"
-      ]
+for (i in seq_len(nrow(scenario_params))) {
+  scen <- scenario_params[i]
+  cat("\n=== Fire domain:", scen$fire_domain, "===\n")
 
-      #check_join_dimensions(sim_fire_dt, current_area_dt, total_fires)
+  for (s in seq_along(v_strategies)) {
+    current_strategy <- v_strategies[s]
+    cat("\nProcessing strategy:", current_strategy)
+    
+    target_strategy_dt <- target_df_agg[strategy == current_strategy]
+    area_strategy_dt   <- perc_data_long[strategy == current_strategy]
+    
+    for (y in seq_along(v_years)) {
+      current_year <- v_years[y]
+      cat("\n - Year:", current_year)
       
-      # --- 7. Attach WUI avoided areas (static per threshold)
-      this_wui <- area_year_dt[sal_int == current_threshold,
-                               .(abs_avoid_wui_nohouse_ha,
-                                 abs_avoid_wui_verylow_ha,
-                                 abs_avoid_wui_low_ha,
-                                 abs_avoid_wui_medium_ha,
-                                 abs_avoid_wui_intermix_ha,
-                                 abs_avoid_wui_interface_ha)][1]
-      sim_fire_dt[, (names(this_wui)) := this_wui]
+      sal_costs_dt <- target_strategy_dt[year == current_year,
+                                         .(sal_int = threshold, sum_SAL_costs)]
+      area_year_dt <- area_strategy_dt[year == current_year]
       
-      # --- 8. Compute benefits
-      sim_fire_dt[, benefit_agr := abs_avoid_agri_ha * land_price_agr]
-      sim_fire_dt[, benefit_ff  := abs_avoid_tot_ha  * fire_fight_cost_per_ha]
+      cat(" -- Threshold: ")
       
-      sim_fire_dt[, struct_loss :=
-                    abs_avoid_wui_verylow_ha  * dens_verylow  * fa_verylow  * eur_m2 * damage_ratio * vuln_verylow  +
-                    abs_avoid_wui_low_ha      * dens_low      * fa_low      * eur_m2 * damage_ratio * vuln_low      +
-                    abs_avoid_wui_medium_ha   * dens_medium   * fa_medium   * eur_m2 * damage_ratio * vuln_medium   +
-                    abs_avoid_wui_intermix_ha * dens_intermix * fa_intermix * eur_m2 * damage_ratio * vuln_intermix +
-                    abs_avoid_wui_interface_ha* dens_interface* fa_interface* eur_m2 * damage_ratio * vuln_interface]
-      
-      sim_fire_dt[, benefit_per_event := benefit_agr + benefit_ff + struct_loss]
-      
-      # --- 9. Aggregate per year
-      yearly_dt <- sim_fire_dt[, .(
-        benefit_total = sum(benefit_per_event),
-        number_fires_per_year = .N
-      ), by = simulation_id]
-      
-      # --- 10. Compute net benefit
-      yearly_dt[, net_benefit := benefit_total - current_sal_costs]
-      yearly_dt[, `:=`(strategy = current_strategy,
-                       year = current_year,
-                       sal_int = current_threshold,
-                       sal_cost = current_sal_costs)]
-      
-      # --- 11. Summarize probability of positive net benefit
-      nbp <- mean(yearly_dt$net_benefit > 0)
-      
-      mc_results_list_dt[[length(mc_results_list_dt) + 1]] <- data.table(
-        strategy = current_strategy,
-        year = current_year,
-        sal_int = current_threshold,
-        net_benefit_positive = nbp,
-        sal_cost = current_sal_costs
-      )
-      
-      mc_raw_list_dt[[length(mc_raw_list_dt) + 1]] <- yearly_dt
+      for (t in seq_along(v_thresholds)) {
+        current_threshold <- v_thresholds[t]
+        cat(current_threshold, "..")
+        
+        # --- 1. Extract costs and areas
+        current_sal_costs <- sal_costs_dt[sal_int == current_threshold, sum_SAL_costs]
+        if (length(current_sal_costs) == 0) current_sal_costs <- 0
+        
+        # Subset area data for this threshold
+        current_area_dt <- area_year_dt[sal_int == current_threshold,
+                                        .(time, percentile,
+                                          abs_avoid_tot_ha,
+                                          abs_avoid_agri_ha,
+                                          abs_avoid_urbn_ha,
+                                          abs_avoid_wild_ha)]
+        
+        # --- 2. Sample number of fires per year for each simulation
+        number_fires_vec <- sample(scen$freq_min:scen$freq_max, num_simulations, replace = TRUE)
+        total_fires <- sum(number_fires_vec)
+        
+        # --- 3. Mapping of fires to simulation IDs
+        fire_map <- data.table(
+          simulation_id = rep(seq_len(num_simulations), times = number_fires_vec)
+        )
+        
+        # --- 4. Draw all random values
+        sampled_duration <- if (is.na(scen$fixed_duration_min)) {
+          sample(dur, total_fires, replace = TRUE)
+        } else {
+          rep(scen$fixed_duration_min, total_fires)
+        }
+
+        sim_fire_dt <- data.table(
+          simulation_id = fire_map$simulation_id,
+          fire_id = sequence(number_fires_vec),
+          percentile = runif(total_fires, scen$percentile_start, scen$percentile_end),
+          duration_min = sampled_duration,
+          
+          land_price_agr = rlnorm(total_fires, meanlog = log(3000), sdlog = 0.6),
+          fire_fight_cost_per_ha = rlnorm(total_fires, meanlog = log(24000), sdlog = 0.15),
+          eur_m2 = rlnorm(total_fires, meanlog = log(1600), sdlog = 0.25),
+          damage_ratio = pmin(rbeta(total_fires, 2, 4), 1),
+          
+          dens_verylow  = runif(total_fires, 0.02, 0.06),
+          dens_low      = runif(total_fires, 0.10, 0.50),
+          dens_medium   = runif(total_fires, 0.50, 40.0),
+          dens_intermix = runif(total_fires, 0.06, 7.50),
+          dens_interface= runif(total_fires, 0.06, 40.0),
+          
+          fa_verylow  = rnorm(total_fires, 250, 20),
+          fa_low      = rnorm(total_fires, 160, 20),
+          fa_medium   = rnorm(total_fires, 100, 15),
+          fa_intermix = rnorm(total_fires, 150, 15),
+          fa_interface= rnorm(total_fires, 120, 15),
+          
+          vuln_verylow  = 0.6,
+          vuln_low      = 0.7,
+          vuln_medium   = 0.85,
+          vuln_intermix = 1.0,
+          vuln_interface= 1.0
+        )
+        
+        # --- 5. Discretize to lookup resolution
+        sim_fire_dt[, percentile := round(percentile, 2)]
+        sim_fire_dt[, duration_min := round_to_5(duration_min)]
+        
+        
+        # --- 6. Exact match join to attach avoided areas
+        setkey(current_area_dt, percentile, time)
+        setkey(sim_fire_dt, percentile, duration_min)
+        
+        sim_fire_dt <- current_area_dt[
+          sim_fire_dt, on = .(percentile, time = duration_min), roll = "nearest"
+        ]
+
+        #check_join_dimensions(sim_fire_dt, current_area_dt, total_fires)
+        
+        # --- 7. Attach WUI avoided areas (static per threshold)
+        this_wui <- area_year_dt[sal_int == current_threshold,
+                                 .(abs_avoid_wui_nohouse_ha,
+                                   abs_avoid_wui_verylow_ha,
+                                   abs_avoid_wui_low_ha,
+                                   abs_avoid_wui_medium_ha,
+                                   abs_avoid_wui_intermix_ha,
+                                   abs_avoid_wui_interface_ha)][1]
+        sim_fire_dt[, (names(this_wui)) := this_wui]
+        
+        # --- 8. Compute benefits
+        sim_fire_dt[, benefit_agr := abs_avoid_agri_ha * land_price_agr]
+        sim_fire_dt[, benefit_ff  := abs_avoid_tot_ha  * fire_fight_cost_per_ha]
+        
+        sim_fire_dt[, struct_loss :=
+                      abs_avoid_wui_verylow_ha  * dens_verylow  * fa_verylow  * eur_m2 * damage_ratio * vuln_verylow  +
+                      abs_avoid_wui_low_ha      * dens_low      * fa_low      * eur_m2 * damage_ratio * vuln_low      +
+                      abs_avoid_wui_medium_ha   * dens_medium   * fa_medium   * eur_m2 * damage_ratio * vuln_medium   +
+                      abs_avoid_wui_intermix_ha * dens_intermix * fa_intermix * eur_m2 * damage_ratio * vuln_intermix +
+                      abs_avoid_wui_interface_ha* dens_interface* fa_interface* eur_m2 * damage_ratio * vuln_interface]
+        
+        sim_fire_dt[, benefit_per_event := benefit_agr + benefit_ff + struct_loss]
+        
+        # --- 9. Aggregate per year
+        yearly_dt <- sim_fire_dt[, .(
+          benefit_total = sum(benefit_per_event),
+          number_fires_per_year = .N
+        ), by = simulation_id]
+        
+        # --- 10. Compute net benefit
+        yearly_dt[, net_benefit := benefit_total - current_sal_costs]
+        yearly_dt[, `:=`(strategy = current_strategy,
+                         year = current_year,
+                         sal_int = current_threshold,
+                         sal_cost = current_sal_costs,
+                         fire_domain = scen$fire_domain)]
+        
+        # --- 11. Summarize probability of positive net benefit
+        nbp <- mean(yearly_dt$net_benefit > 0)
+        
+        mc_results_list_dt[[length(mc_results_list_dt) + 1]] <- data.table(
+          strategy = current_strategy,
+          year = current_year,
+          sal_int = current_threshold,
+          net_benefit_positive = nbp,
+          sal_cost = current_sal_costs,
+          fire_domain = scen$fire_domain
+        )
+        
+        mc_raw_list_dt[[length(mc_raw_list_dt) + 1]] <- yearly_dt
+      }
     }
   }
 }
@@ -317,22 +332,15 @@ mc_results_dt <- rbindlist(mc_results_list_dt)
 mc_raw_dt <- rbindlist(mc_raw_list_dt)
 
 
-summary(mc_raw_dt$benefit_total)
-
 saveRDS(mc_raw_dt, file = "mc_raw_dt.rds")
-#saveRDS(mc_raw_dt, file = "mc_raw_dt_tail.rds") # tail not needed!
-saveRDS(mc_results_dt, file = "mc_results_dt_full.rds")
-saveRDS(mc_results_dt, file = "mc_results_dt_tail.rds")
+saveRDS(mc_results_dt, file = "mc_results_dt.rds")
+# Optional backwards-compatible exports
+#saveRDS(mc_results_dt[fire_domain == "Full"], file = "mc_results_dt_full.rds")
+#saveRDS(mc_results_dt[fire_domain == "Tail"], file = "mc_results_dt_tail.rds")
 
 # reload
 mc_raw_dt <- readRDS("mc_raw_dt.rds")
-mc_results_dt_full <- readRDS("mc_results_dt_full.rds")
-mc_results_dt_tail <- readRDS("mc_results_dt_tail.rds")
-
-# merge, add column to indicate tail vs. full
-mc_results_dt_full[, fire_domain := "Full"]
-mc_results_dt_tail[, fire_domain := "Tail"]
-mc_results_dt <- rbind(mc_results_dt_full, mc_results_dt_tail)
+mc_results_dt <- readRDS("mc_results_dt.rds")
 
 
 # ----------------------------------------
@@ -361,10 +369,10 @@ mc_results_dt <- mc_results_dt %>%
 # 1. Define the shared color scale as a reusable function or object
 # This ensures the 0.2 'yellow' transition is identical in both
 shared_fill_scale <- scale_fill_gradientn(
-  colors = c("red", "yellow", "darkgreen"),
-  values = rescale(c(0, 0.1, 1)), 
+  colors = c("firebrick", "khaki2", "darkgreen"),
+  values = rescale(c(0, 0.5, 1)), 
   limits = c(0, 1),
-  breaks = c(0, 0.1, 0.2, 0.5, 1),
+  breaks = c(0, 0.25, 0.5, 0.75, 1),
   trans = "sqrt"
 )
 
@@ -407,215 +415,72 @@ ggsave(plot = p.heatmap.npv, filename = "./out/fig/p_heatmap_npv.png",
 mc_raw_df <- as.data.frame(mc_raw_dt)
 mc_raw_df <- mc_raw_df[is.finite(mc_raw_df$net_benefit), ]
 
+build_cost_benefit_hist <- function(df_in, panel_title, show_x_axis = TRUE) {
+  dt_plot <- rbindlist(list(
+    data.table(type = "Benefit", value = df_in$benefit_total, sign = 1),
+    data.table(type = "Cost", value = df_in$sal_cost, sign = -1)
+  ))
+  dt_plot[, sign := as.numeric(sign)]
 
-dt_plot <- rbindlist(list(
-  data.table(type = "Benefit", value = mc_raw_df$benefit_total, sign = 1),
-  data.table(type = "Cost", value = mc_raw_df$sal_cost, sign = -1)
-))
+  hdata <- dt_plot[, .(x = signed_log10(value)), by = .(type, sign)]
+  hdata <- hdata[, .N, by = .(type, sign, bin = cut(x, breaks = 100))]
+  hdata[, bin_mid := get_mid(bin)]
+  hdata[, count_pos := N]
 
-dt_plot[, sign := as.numeric(sign)]
+  P <- c(1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8)
+  full_vals <- c(-rev(P), 0, P)
 
-# --- pre-bin (so we can control Y signs and axis) ---
-hdata <- dt_plot[, .(x = signed_log10(value)), by = .(type, sign)]
-hdata <- hdata[, .N, by = .(type, sign, bin = cut(x, breaks = 100))]
+  p <- ggplot(hdata, aes(x = bin_mid, y = count_pos, fill = type)) +
+    geom_vline(xintercept = 0, color = "black", linetype = "solid", linewidth = 0.5) +
+    geom_col(data = hdata[type == "Benefit"], alpha = 0.6, color = "grey40") +
+    geom_col(data = hdata[type == "Cost"], aes(y = -count_pos), alpha = 0.6, color = "grey40") +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    scale_fill_manual(values = c("Benefit" = "darkgreen", "Cost" = "firebrick")) +
+    scale_x_continuous(
+      name = "Value (EUR)",
+      breaks = signed_log10(full_vals),
+      labels = comma(full_vals)
+    ) +
+    scale_y_continuous(
+      trans = "signed_sqrt",
+      name = "Count",
+      labels = label_number(accuracy = 1, big.mark = ",", style_negative = "parens"),
+      expand = expansion(mult = c(0.05, 0.05))
+    ) +
+    labs(title = panel_title, fill = NULL) +
+    theme_minimal(base_size = 13) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.minor = element_blank(),
+      legend.position = "top"
+    )
 
-hdata[, bin_mid := get_mid(bin)]
-hdata[, count_pos := N] # always positive
+  if (!show_x_axis) {
+    p <- p + theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+  }
 
-# --- Define break values and corresponding labels ---
-# P: positive break values (in original currency scale)
-P <- c(1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8)
-
-# Full set of values to label, including negative and zero
-full_vals <- c(-rev(P), 0, P)
-
-# --- plotting ---
-p.mc.1 <- ggplot(hdata, aes(x = bin_mid, y = count_pos, fill = type)) +
-  # Vertical line at X=0 (which is the median/zero point)
-  geom_vline(xintercept = 0, color = "black", linetype = "solid", linewidth = 0.5) +
-  geom_col(data = hdata[type == "Benefit"], alpha = 0.6, color = "grey40") +
-  geom_col(data = hdata[type == "Cost"], aes(y = -count_pos), alpha = 0.6, color = "grey40") +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  scale_fill_manual(values = c("Benefit" = "darkgreen", "Cost" = "firebrick")) +
-  
-  # --- Custom Axis Formatting ---
-  scale_x_continuous(
-    name = "Value (EUR)",
-    # Apply signed_log10 to all break values (negative, zero, and positive)
-    breaks = signed_log10(full_vals), 
-    # Use scales::comma to format all labels
-    labels = comma(full_vals) 
-  ) +
-  scale_y_continuous(
-    # Keeping your original Y-axis definition, but note that 
-    trans = "signed_sqrt", # would be the better choice if you need scaling.
-    name = "Count",
-    labels = label_number(accuracy = 1, big.mark = ",", style_negative = "parens"),
-    expand = expansion(mult = c(0.05, 0.05))
-  ) +
-  
-  labs(title = "Monte Carlo output: Benefits (up) vs Costs (down)", fill = NULL) +
-  theme_minimal(base_size = 13) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    panel.grid.minor = element_blank(),
-    legend.position = "top"
-  )
-
-p.mc.1
-ggsave(plot = p.mc.1, "./out/fig/p_mc_cost_benefit_full.png", 
-       width = 6, height = 4, bg = "white")
-ggsave(plot = p.mc.1, "./out/fig/p_mc_cost_benefit_95tail.png", 
-       width = 6, height = 4, bg = "white")
-
-
-summary(lm(net_benefit~percentile + duration_min + number_fires_per_year + land_price_agr + houses_per_ha + house_price + strategy + sal_int, data = mc_raw_df))
-
-mc_raw_df$net_benefit_log <- signed_log10(mc_raw_df$net_benefit)
-
-# --- 2. ridge plot ---
-
-# Assuming the original helper function is defined as:
-# signed_log10 <- function(x) sign(x) * log10(1 + abs(x))
-
-# ------------------------
-# 1. Define the Inverse Transformation Function (Required for Labels)
-# ------------------------
-
-# This function maps the axis position (x) back to the original currency value.
-# It is the inverse of the signed_log10 function.
-signed_antilog10 <- function(x_transformed) {
-  sign(x_transformed) * (10^(abs(x_transformed)) - 1)
+  p
 }
 
-# ------------------------
-# 2. Ridge Plot with Corrected X-Axis Labels
-# ------------------------
-mc_raw_df$net_benefit_log <- signed_log10(mc_raw_df$net_benefit)
+p.mc.full <- build_cost_benefit_hist(
+  df_in = mc_raw_df[mc_raw_df$fire_domain == "Full", ],
+  panel_title = "Panel A: Full distribution",
+  show_x_axis = FALSE
+)
 
-p.mc.2 <- ggplot(mc_raw_df %>%
-         filter(!is.na(net_benefit_log)), # Simplified filter for clarity
-       aes(x = net_benefit_log, y = factor(year), fill = ..density..)) +
-  geom_density_ridges_gradient(
-    scale = 2,
-    rel_min_height = 0.01,
-    alpha = 0.9
-  ) +
-  scale_fill_viridis_c(name = "Density", option = "C") +
-  
-  # --- Corrected X-Axis Ticks ---
-  scale_x_continuous(
-    name = "Net Benefit (€)",
-    # Define a clean set of break locations on the transformed axis
-    breaks = seq(-8, 8, by = 2), # Adjusted breaks to cover common log10 range
-    
-    # Use the inverse function to calculate the true value for each break location (x)
-    labels = function(x) {
-      # 1. Back-transform x (the axis break location) to the original currency value (val)
-      val <- signed_antilog10(x) 
-      
-      # 2. Format the true currency value (val) with suffixes
-      sapply(val, function(v) {
-        # Check for NA/Inf/non-finite values
-        if (!is.finite(v) || abs(v) < 1) return("0") 
-        
-        # Use abs_v for formatting to handle negative signs correctly later
-        abs_v <- abs(v)
-        
-        formatted_val <- if (abs_v < 1e3) {
-          # < 1k
-          sprintf("%.0f", v)
-        } else if (abs_v < 1e6) {
-          # 1k to 1M
-          # Use scales::label_dollar to format with commas and 'k' suffix for cleanliness
-          scales::label_number(scale = 1/1e3, suffix = "K", accuracy = 1)(abs_v)
-        } else if (abs_v < 1e9) {
-          # 1M to 1B
-          scales::label_number(scale = 1/1e6, suffix = "M", accuracy = 1)(abs_v)
-        } else {
-          # 1B+
-          scales::label_number(scale = 1/1e9, suffix = "B", accuracy = 1)(abs_v)
-        }
-        
-        # Prepend the sign if the original value was negative, otherwise return as is
-        if (v < 0) paste0("-", formatted_val) else formatted_val
-      })
-    }
-  ) +
-  
-  labs(
-    title = "Distribution of Simulated Net Benefits per Year",
-    subtitle = "Monte Carlo results, symmetric log-transformed scale (back-transformed axis)",
-    y = "Year"
-  ) +
-  
-  theme_minimal(base_size = 12) +
-  theme(
-    legend.position = "right",
-    panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank(),
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
-  )
+p.mc.tail <- build_cost_benefit_hist(
+  df_in = mc_raw_df[mc_raw_df$fire_domain == "Tail", ],
+  panel_title = "Panel B: Single long-duration high-severity fire",
+  show_x_axis = TRUE
+)
 
-ggsave(plot = p.mc.2, "./out/fig/p_mc_net_benefit_95tail.png", 
-       height = 4, width = 6, bg = "white")
+p.mc.combined <- (p.mc.full / p.mc.tail) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "top")
 
-
-
-# --- 3. define facet variable (Year 2049 vs. other years) ---
-mc_raw_df <- mc_raw_df %>%
-  mutate(year_group = ifelse(year == 2049, "Year 2049", "Other years"))
-
-# --- 4. Ridge plot by scenario (robust version) ---
-ggplot(mc_raw_df,
-       aes(x = net_benefit_log, y = strategy, fill = ..density..)) +
-  geom_density_ridges_gradient(
-    scale = 2,
-    rel_min_height = 0.01,
-    alpha = 0.9
-  ) +
-  scale_fill_viridis_c(name = "Density", option = "C") +
-  
-  # --- Back-transform x-axis labels ---
-  scale_x_continuous(
-    name = "Net Benefit (€)",
-    labels = function(x) {
-      val <- inv_signed_log10(x)
-      sapply(val, function(v) {
-        if (is.na(v)) return(NA_character_)
-        if (abs(v) < 1e3) {
-          sprintf("%.0f", v)
-        } else if (abs(v) < 1e6) {
-          sprintf("%s%sk",
-                  ifelse(v < 0, "-", ""),
-                  formatC(abs(v) / 1e3, format = "f", digits = 0))
-        } else {
-          sprintf("%s%.1fM",
-                  ifelse(v < 0, "-", ""),
-                  abs(v) / 1e6)
-        }
-      })
-    },
-    breaks = seq(-10, 10, by = 2)
-  ) +
-  
-  facet_wrap(~ year_group, nrow = 2, scales = "free_y") +
-  labs(
-    title = "Distribution of Simulated Net Benefits by Scenario",
-    subtitle = "Comparison between Year 2049 (outlier) and all other years",
-    y = "Management Scenario"
-  ) +
-  
-  theme_minimal(base_size = 12) +
-  theme(
-    legend.position = "right",
-    panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank(),
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
-  )
-
-
-
+p.mc.combined
+ggsave(plot = p.mc.combined, "./out/fig/p_mc_cost_benefit_full_vs_extreme.png",
+       width = 7, height = 8, bg = "white")
 
 
 

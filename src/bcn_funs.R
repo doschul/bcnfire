@@ -203,42 +203,6 @@ get_burners_optimized <- function(time_horizon,
 
 
 
-
-one_cell_scenario_path = function(ignition_cell, 
-                                  scenarios = c("bau", "sal"),
-                                  time_horizon = 6,
-                                  time_step = 10
-                                  ){
-  
-  # prepare viz_list with scenario results
-  viz_list <- lapply(scenarios, function(x){
-    get_burners(time_horizon = time_horizon,
-                ignition_cell = ignition_cell,
-                time_step = time_step,    # in minutes
-                scenario = x, # select scenario (bau, sal)
-                full = TRUE)})
-    
-    # add name column to each list df
-    for (s in 1:length(scenarios)) {
-      
-      viz_list[[s]] <- apply(viz_list[[s]], 2, sum) %>% t() %>%
-        as.data.frame(.) %>%
-        mutate(scenario = scenarios[s]) %>%
-        pivot_longer(-scenario, names_to = "time", values_to = "burned") %>%
-        mutate(time = as.numeric(gsub("V", "", time)) * time_step)
-    }
-    
-    viz_df <- do.call(bind_rows, viz_list)
-    
-    p <- ggplot(viz_df) +
-      geom_line(aes(x = time, y = burned, color = scenario)) +
-      labs(x = "Time (minutes)", y = "Burned cells") +
-      theme_minimal()
-    
-    return(p)
-}
-
-
 BCN_target_df = function(
     data,
     original_cols, # Must be length 2: [ROS_col, Con_col]
